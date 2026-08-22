@@ -103,13 +103,25 @@ function patchChildren(
   prevChildren: VNode[],
   nextChildren: VNode[],
 ): void {
-  const allKeyed =
-    nextChildren.length > 0 && nextChildren.every((child) => child.props.key != null);
-  if (allKeyed) {
+  if (isKeyedChildren(nextChildren)) {
     patchKeyedChildren(parentDom, prevChildren, nextChildren);
   } else {
     patchIndexedChildren(parentDom, prevChildren, nextChildren);
   }
+}
+
+/**
+ * The single home of the "when is a child list keyed" rule: keyed mode is used
+ * only when **every** next child carries a `key`. Partially-keyed lists fall
+ * back to the indexed mode on purpose (see {@link patchChildren}).
+ *
+ * Exported so the Stage 4 fiber walk reuses the exact same predicate instead of
+ * duplicating the rule.
+ */
+export function isKeyedChildren(nextChildren: VNode[]): boolean {
+  return (
+    nextChildren.length > 0 && nextChildren.every((child) => child.props.key != null)
+  );
 }
 
 /** Positional diff: patch the common range, mount extras, drop the tail. */
