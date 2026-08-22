@@ -1,32 +1,62 @@
 import { TEXT_ELEMENT, type VChild, type VNode } from "./types.js";
 
 /**
- * Stage 1 (skeleton): build a virtual node tree.
+ * A child argument as accepted by {@link createElement}: either a single
+ * {@link VChild} or an arbitrarily nested array of them (e.g. the result of
+ * `items.map(...)` passed straight in as one argument).
+ */
+type VChildInput = VChild | VChildInput[];
+
+/**
+ * Stage 1: build a virtual node tree.
  *
  * This is the single entry point the (future) JSX pragma compiles down to
  * (`h(type, props, ...children)`). For now it is a hand-called factory.
  *
- * TODO(Этап 1): implement full normalisation — flatten nested child arrays,
- * drop `null`/`undefined`/`boolean` children, and wrap raw strings/numbers in
- * TEXT_ELEMENT nodes. The stub below is enough for the Stage 0 smoke test.
+ * Child normalisation guarantees `props.children` is always a flat `VNode[]`:
+ * - nested arrays are flattened (any depth);
+ * - `null` / `undefined` / `boolean` children are dropped (enables the
+ *   `cond && h(...)` conditional-rendering idiom);
+ * - raw strings and numbers are wrapped in {@link TEXT_ELEMENT} nodes.
  */
 export function createElement(
-  _type: string,
-  _props?: Record<string, unknown> | null,
-  ..._children: VChild[]
+  type: string,
+  props?: Record<string, unknown> | null,
+  ...children: VChildInput[]
 ): VNode {
-  // TODO(Этап 1): implement
-  throw new Error("createElement is not implemented yet (Этап 1)");
+  return {
+    type,
+    props: {
+      ...props,
+      children: normalizeChildren(children),
+    },
+  };
 }
 
 /**
- * Wrap a primitive into a text virtual node.
- * TODO(Этап 1): used by createElement's child-normalisation.
+ * Wrap a primitive into a text virtual node. Used by createElement's
+ * child-normalisation; text nodes carry their content in `props.nodeValue`.
  */
-export function createTextElement(_value: string | number): VNode {
-  // TODO(Этап 1): implement
+export function createTextElement(value: string | number): VNode {
   return {
     type: TEXT_ELEMENT,
-    props: { nodeValue: String(_value), children: [] },
+    props: { nodeValue: String(value), children: [] },
   };
+}
+
+/** Flatten, filter and wrap raw children into a proper `VNode[]`. */
+function normalizeChildren(children: VChildInput[]): VNode[] {
+  const result: VNode[] = [];
+  for (const child of children) {
+    if (Array.isArray(child)) {
+      result.push(...normalizeChildren(child));
+    } else if (child === null || child === undefined || typeof child === "boolean") {
+      // Skipped on purpose: enables `cond && h(...)` conditional rendering.
+    } else if (typeof child === "string" || typeof child === "number") {
+      result.push(createTextElement(child));
+    } else {
+      result.push(child);
+    }
+  }
+  return result;
 }

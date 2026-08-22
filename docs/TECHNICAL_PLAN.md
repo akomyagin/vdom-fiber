@@ -56,7 +56,7 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
 - Один тривиальный smoke-тест (`src/index.test.ts`), проверяющий сборку и jsdom.
 - DoD: `npm install && npx tsc --noEmit && npm test` проходят чисто.
 
-### Этап 1 — `createElement` + VNode-дерево
+### Этап 1 — `createElement` + VNode-дерево (готово)
 
 - Реализовать `createElement(type, props, ...children)`:
   - нормализация детей: развернуть вложенные массивы, отбросить
