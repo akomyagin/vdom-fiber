@@ -90,7 +90,7 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
   сохранение DOM-идентичности неизменённых узлов (не пересоздаются).
 - DoD: повторный `reconcile` применяет минимальные мутации, не перестраивая всё дерево.
 
-### Этап 4 — Fiber-структура данных
+### Этап 4 — Fiber-структура данных (готово)
 
 - Ввести `Fiber` (`type`, `props`, `dom`, `parent`/`child`/`sibling`, `alternate`,
   effect tag: PLACEMENT / UPDATE / DELETION).
