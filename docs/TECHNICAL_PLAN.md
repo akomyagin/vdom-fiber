@@ -77,7 +77,7 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
   обработчики срабатывают, атрибуты выставлены.
 - DoD: произвольное VNode-дерево корректно отрисовывается в контейнер за один синхронный проход.
 
-### Этап 3 — VDOM-диффинг (reconciliation), синхронный
+### Этап 3 — VDOM-диффинг (reconciliation), синхронный (готово)
 
 - `reconcile(container, prev, next)`: диффинг одного узла:
   - оба null → no-op; `prev` null → mount; `next` null → remove;
