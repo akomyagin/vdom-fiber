@@ -67,7 +67,7 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
   сохранение прочих props.
 - DoD: любой валидный вызов возвращает предсказуемое VNode-дерево; ветки нормализации покрыты.
 
-### Этап 2 — Синхронный mount (без диффинга)
+### Этап 2 — Синхронный mount (без диффинга) (готово)
 
 - `render(vnode, container)`: рекурсивно создать реальные DOM-узлы
   (`document.createElement` / `createTextNode`), применить props
