@@ -20,12 +20,20 @@ export interface VProps {
 }
 
 /**
+ * Stage 6: a function component. Receives its props bag (including normalised
+ * `children`) and returns a single VNode subtree, or `null` to render nothing.
+ * Returning exactly one node (not an array) is a deliberate MVP simplification:
+ * fragments are out of scope.
+ */
+export type ComponentFunction = (props: VProps) => VNode | null;
+
+/**
  * A virtual DOM node. `type` is either an intrinsic tag name (`"div"`), the
  * special {@link TEXT_ELEMENT} marker, or — from Stage 6 onwards — a function
  * component. `nodeValue` only appears on text elements.
  */
 export interface VNode {
-  type: string;
+  type: string | ComponentFunction;
   props: VProps;
 }
 

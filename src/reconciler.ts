@@ -215,6 +215,14 @@ function patchKeyedChildren(
  * mount/replace, so the node-creation logic exists exactly once.
  */
 export function createDomNode(vnode: VNode): Node {
+  if (typeof vnode.type === "function") {
+    // Deliberate refusal (Stage 6 plan): function components live in the fiber
+    // pipeline (`scheduleWork`); the synchronous Stage 2/3 path does not
+    // duplicate their support. This also narrows `type` to `string` below.
+    throw new Error(
+      "Function components are not supported by the synchronous renderer; use scheduleWork",
+    );
+  }
   if (vnode.type === TEXT_ELEMENT) {
     return document.createTextNode(String(vnode.props.nodeValue));
   }

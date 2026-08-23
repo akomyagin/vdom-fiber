@@ -120,7 +120,7 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
 - DoD: длинный рендер не блокирует поток одним синхронным проходом; приоритеты соблюдаются;
   результат идентичен синхронной версии.
 
-### Этап 6 — Hooks (`useState`)
+### Этап 6 — Hooks (`useState`) — последний этап MVP (готово)
 
 - Пер-fiber список хуков, сопоставление по порядку вызова (rules of hooks).
 - `useState(initial)` → `[state, setState]`; `setState` кладёт обновление в очередь
