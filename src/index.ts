@@ -12,7 +12,7 @@ export type { Fiber } from "./fiber.js";
 export { scheduleWork, Priority } from "./scheduler.js";
 export { useState } from "./hooks.js";
 export { TEXT_ELEMENT } from "./types.js";
-export type { VNode, VProps, VChild } from "./types.js";
+export type { VNode, VProps, VChild, ComponentFunction } from "./types.js";
 
 /** Library version marker, handy for smoke tests and debugging. */
 export const VERSION = "0.0.0";

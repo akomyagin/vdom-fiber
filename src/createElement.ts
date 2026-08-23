@@ -1,4 +1,9 @@
-import { TEXT_ELEMENT, type VChild, type VNode } from "./types.js";
+import {
+  TEXT_ELEMENT,
+  type ComponentFunction,
+  type VChild,
+  type VNode,
+} from "./types.js";
 
 /**
  * A child argument as accepted by {@link createElement}: either a single
@@ -20,7 +25,7 @@ type VChildInput = VChild | VChildInput[];
  * - raw strings and numbers are wrapped in {@link TEXT_ELEMENT} nodes.
  */
 export function createElement(
-  type: string,
+  type: string | ComponentFunction,
   props?: Record<string, unknown> | null,
   ...children: VChildInput[]
 ): VNode {

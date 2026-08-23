@@ -4,6 +4,7 @@ import {
   performUnitOfWork,
   type Fiber,
 } from "./fiber.js";
+import { __setRerenderScheduler } from "./hooks.js";
 import type { VNode } from "./types.js";
 
 /**
@@ -158,6 +159,36 @@ export function scheduleWork(
 }
 
 /**
+ * Stage 6: re-schedule the CURRENT tree of `container` — the narrow entry point
+ * `setState` uses. The top-level VNode is not a parameter on purpose: its
+ * single source of truth is the `currentVNode` this module saved at the last
+ * commit, so hooks never keep their own copy of the tree. Everything else
+ * (queueing, preemption, work loop) is the untouched `scheduleWork` machinery.
+ *
+ * `Priority.Normal` is the deliberate default for `setState` re-renders (the
+ * teaching counter does not need UserBlocking semantics).
+ *
+ * Internal contract (like `__setSchedulerDeps`): not re-exported from index.ts.
+ */
+export function scheduleRerender(
+  container: Element,
+  priority: Priority = Priority.Normal,
+): void {
+  if (container !== currentContainer) {
+    // Nothing committed for this container (or another container has committed
+    // since — the scheduler keeps ONE current triple, a Stage 5 limitation):
+    // a stale setState has no tree to re-render, drop it.
+    return;
+  }
+  scheduleWork(container, currentVNode, priority);
+}
+
+// Register the setState → re-render bridge at load time. hooks.ts deliberately
+// does not import the scheduler, keeping the value-level import graph acyclic:
+// scheduler → fiber → hooks.
+__setRerenderScheduler(scheduleRerender);
+
+/**
  * Test-only hook: override part of the scheduler dependencies. Returns a reset
  * function that restores the production defaults AND clears all module-level
  * scheduler state (queue, current/WIP trees), so tests cannot leak into each
@@ -259,14 +290,19 @@ function startNextPendingRender(): boolean {
   // currentRoot/currentVNode is kept in sync — an existing root means the
   // vnode is trustworthy); a different container is a fresh target and mounts
   // from scratch.
-  const prevVNode =
-    entry.container === currentContainer && currentRoot !== null
-      ? currentVNode
-      : null;
+  const hasPrev = entry.container === currentContainer && currentRoot !== null;
+  const prevVNode = hasPrev ? currentVNode : null;
   activePriority = entry.priority;
   wipContainer = entry.container;
   wipVNode = entry.vnode;
-  wipRoot = createWorkInProgress(entry.container, prevVNode, entry.vnode);
+  // Stage 6: the committed root fiber rides along as the prev-side fiber tree —
+  // function components read their hooks and previously rendered result off it.
+  wipRoot = createWorkInProgress(
+    entry.container,
+    prevVNode,
+    entry.vnode,
+    hasPrev ? currentRoot : null,
+  );
   nextUnitOfWork = wipRoot;
   return true;
 }
