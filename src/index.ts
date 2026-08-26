@@ -10,7 +10,8 @@ export { reconcile } from "./reconciler.js";
 export { performUnitOfWork } from "./fiber.js";
 export type { Fiber } from "./fiber.js";
 export { scheduleWork, Priority } from "./scheduler.js";
-export { useState } from "./hooks.js";
+export { useState, useEffect } from "./hooks.js";
+export type { EffectCallback, EffectCleanup } from "./hooks.js";
 export { TEXT_ELEMENT } from "./types.js";
 export type { VNode, VProps, VChild, ComponentFunction } from "./types.js";
 

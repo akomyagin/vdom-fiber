@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createElement as h } from "./createElement.js";
-import { useState } from "./hooks.js";
+import { useEffect, useState } from "./hooks.js";
 import { Priority, __setSchedulerDeps, scheduleWork } from "./scheduler.js";
 import type { VNode, VProps } from "./types.js";
 
@@ -471,5 +471,442 @@ describe("hooks / function components", () => {
   // Rules of hooks: вызов вне рендера компонента — явная ошибка.
   it("useState вне рендера компонента бросает понятную ошибку", () => {
     expect(() => useState(0)).toThrowError(/outside of a function component/);
+  });
+});
+
+describe("useEffect (Post-MVP §1)", () => {
+  afterEach(() => {
+    __setSchedulerDeps({})();
+  });
+
+  type Setter<S> = (action: S | ((prev: S) => S)) => void;
+
+  // 1. Эффект запускается ПОСЛЕ commit, не до: он видит уже обновлённый DOM.
+  it("эффект запускается после commit и видит обновлённый DOM", () => {
+    installSyncDeps();
+    const log: Array<string | null | undefined> = [];
+    const container = document.createElement("div");
+    function App(): VNode {
+      useEffect(() => {
+        log.push(container.querySelector("p")?.textContent);
+      });
+      return h("p", null, "ready");
+    }
+
+    scheduleWork(container, h(App, null), Priority.Normal);
+
+    // Ровно один запуск после единственного commit; DOM к моменту запуска
+    // уже содержал результат рендера (эффект не выполнялся во время render).
+    expect(log).toEqual(["ready"]);
+  });
+
+  // 2. deps === [] → эффект ровно один раз (mount only).
+  it("deps=[]: эффект выполняется один раз, повторные рендеры его не перезапускают", () => {
+    installSyncDeps();
+    let runs = 0;
+    function App(): VNode {
+      const [n, setN] = useState(0);
+      useEffect(() => {
+        runs++;
+      }, []);
+      return h("button", { onClick: () => setN(n + 1) }, `n:${n}`);
+    }
+
+    const container = mount(h(App, null));
+    expect(runs).toBe(1);
+
+    container.querySelector("button")!.click();
+    expect(container.innerHTML).toBe("<button>n:1</button>");
+    expect(runs).toBe(1);
+  });
+
+  // 3. deps === undefined → эффект на каждый commit.
+  it("без массива deps эффект запускается на каждый commit", () => {
+    installSyncDeps();
+    let runs = 0;
+    function App(): VNode {
+      const [n, setN] = useState(0);
+      useEffect(() => {
+        runs++;
+      });
+      return h("button", { onClick: () => setN(n + 1) }, `n:${n}`);
+    }
+
+    const container = mount(h(App, null));
+    expect(runs).toBe(1);
+
+    container.querySelector("button")!.click();
+    expect(runs).toBe(2);
+  });
+
+  // 4. Изменившийся dep → cleanup предыдущего, затем новый запуск;
+  //    неизменившийся — пропуск.
+  it("смена deps: cleanup прежнего запуска перед новым; равные deps — пропуск", () => {
+    installSyncDeps();
+    const log: string[] = [];
+    let setDep: Setter<number> | null = null;
+    let setOther: Setter<number> | null = null;
+    function App(): VNode {
+      const [dep, sd] = useState(0);
+      const [other, so] = useState(0);
+      setDep = sd;
+      setOther = so;
+      useEffect(() => {
+        log.push("run");
+        return () => log.push("cleanup");
+      }, [dep]);
+      return h("p", null, `d:${dep},o:${other}`);
+    }
+
+    const container = mount(h(App, null));
+    expect(log).toEqual(["run"]);
+
+    setDep!(1); // рендер 2: dep изменился
+    expect(container.querySelector("p")!.textContent).toBe("d:1,o:0");
+    expect(log).toEqual(["run", "cleanup", "run"]);
+
+    setOther!(1); // рендер 3: dep тот же — эффект не перезапускается
+    expect(container.querySelector("p")!.textContent).toBe("d:1,o:1");
+    expect(log).toEqual(["run", "cleanup", "run"]);
+  });
+
+  // 5. Unmount → cleanup вызывается, host-узлы удалены.
+  it("удаление компонента из дерева вызывает cleanup его эффекта", () => {
+    installSyncDeps();
+    const log: string[] = [];
+    const Widget = (): VNode => {
+      useEffect(() => {
+        log.push("mount");
+        return () => log.push("cleanup");
+      }, []);
+      return h("p", { id: "w" }, "widget");
+    };
+    const withWidget = h("div", null, h("span", null, "s"), h(Widget, null));
+    const withoutWidget = h("div", null, h("span", null, "s"));
+
+    const container = mount(withWidget);
+    expect(log).toEqual(["mount"]);
+    const widgetDom = container.querySelector("#w")!;
+
+    scheduleWork(container, withoutWidget, Priority.Normal);
+
+    expect(log).toEqual(["mount", "cleanup"]);
+    expect(container.querySelector("#w")).toBeNull();
+    expect(container.contains(widgetDom)).toBe(false);
+  });
+
+  // 6. Вложенный unmount: cleanup и Inner, и Outer (обход DELETION-поддерева
+  //    спускается сквозь компонентные уровни).
+  it("удаление Outer вызывает cleanup и Inner, и самого Outer", () => {
+    installSyncDeps();
+    const log: string[] = [];
+    function Inner(): VNode {
+      useEffect(() => () => log.push("inner-cleanup"));
+      return h("em", null, "i");
+    }
+    function Outer(): VNode {
+      useEffect(() => () => log.push("outer-cleanup"));
+      return h("div", null, h(Inner, null));
+    }
+    const withOuter = h("section", null, h("span", null, "s"), h(Outer, null));
+    const withoutOuter = h("section", null, h("span", null, "s"));
+
+    const container = mount(withOuter);
+    scheduleWork(container, withoutOuter, Priority.Normal);
+
+    expect(log).toContain("inner-cleanup");
+    expect(log).toContain("outer-cleanup");
+    expect(container.innerHTML).toBe("<section><span>s</span></section>");
+  });
+
+  // 7. Порядок между fiber'ами: эффекты детей раньше родителя (post-order).
+  it("эффект Inner запускается раньше эффекта Outer", () => {
+    installSyncDeps();
+    const log: string[] = [];
+    function Inner(): VNode {
+      useEffect(() => {
+        log.push("inner");
+      });
+      return h("em", null, "i");
+    }
+    function Outer(): VNode {
+      useEffect(() => {
+        log.push("outer");
+      });
+      return h("div", null, h(Inner, null));
+    }
+
+    mount(h(Outer, null));
+
+    expect(log).toEqual(["inner", "outer"]);
+  });
+
+  // 8. state + effect + state вперемешку: единый hook-list по call-order,
+  //    слоты не путаются.
+  it("useState + useEffect + useState в одном компоненте не путают слоты", () => {
+    installSyncDeps();
+    const log: string[] = [];
+    let setA: Setter<number> | null = null;
+    let setB: Setter<string> | null = null;
+    function App(): VNode {
+      const [a, sa] = useState(1);
+      setA = sa;
+      useEffect(() => {
+        log.push(`effect:${a}`);
+      }, [a]);
+      const [b, sb] = useState("x");
+      setB = sb;
+      return h("p", null, `a:${a},b:${b}`);
+    }
+
+    const container = mount(h(App, null));
+    expect(container.querySelector("p")!.textContent).toBe("a:1,b:x");
+    expect(log).toEqual(["effect:1"]);
+
+    setA!(2); // первый state меняется: эффект перезапущен, b цел
+    expect(container.querySelector("p")!.textContent).toBe("a:2,b:x");
+    expect(log).toEqual(["effect:1", "effect:2"]);
+
+    setB!("y"); // второй state меняется: a цел, эффект НЕ перезапущен
+    expect(container.querySelector("p")!.textContent).toBe("a:2,b:y");
+    expect(log).toEqual(["effect:1", "effect:2"]);
+  });
+
+  // 9а. setState внутри эффекта на ПЕРВОМ mount: реентрантный каскад коммитится,
+  //     current* остаётся консистентным.
+  it("setState внутри эффекта на первом mount доводит DOM и не портит current*", () => {
+    installSyncDeps();
+    let setCount: Setter<number> | null = null;
+    function App(): VNode {
+      const [count, sc] = useState(0);
+      setCount = sc;
+      useEffect(() => {
+        sc((c) => c + 1);
+      }, []);
+      return h("p", null, `c:${count}`);
+    }
+
+    const container = mount(h(App, null));
+
+    // Каскад: mount-commit → эффект → setState → вложенный синхронный
+    // рендер+commit. currentContainer к моменту эффекта уже промотирован.
+    expect(container.querySelector("p")!.textContent).toBe("c:1");
+
+    // Консистентность current* после каскада: следующий независимый setState
+    // диффит (identity узлов сохранена), а не уходит в «чистый remount».
+    const p = container.querySelector("p")!;
+    const textNode = p.firstChild!;
+    setCount!((c) => c + 1);
+    expect(container.querySelector("p")!.textContent).toBe("c:2");
+    expect(container.querySelector("p")).toBe(p);
+    expect(p.firstChild).toBe(textNode);
+  });
+
+  // 9б. setState внутри эффекта на ПОВТОРНОМ рендере.
+  it("setState внутри эффекта на повторном рендере доводит DOM и не портит current*", () => {
+    installSyncDeps();
+    let setDep: Setter<number> | null = null;
+    let setCount: Setter<number> | null = null;
+    function App(): VNode {
+      const [dep, sd] = useState(0);
+      const [count, sc] = useState(0);
+      setDep = sd;
+      setCount = sc;
+      useEffect(() => {
+        if (dep === 1) {
+          sc((c) => c + 10);
+        }
+      }, [dep]);
+      return h("p", null, `d:${dep},c:${count}`);
+    }
+
+    const container = mount(h(App, null));
+    expect(container.querySelector("p")!.textContent).toBe("d:0,c:0");
+
+    // Второй рендер: dep изменился → эффект → setState → вложенный каскад.
+    setDep!(1);
+    expect(container.querySelector("p")!.textContent).toBe("d:1,c:10");
+
+    // Консистентность current* после вложенных коммитов.
+    const p = container.querySelector("p")!;
+    setCount!((c) => c + 1);
+    expect(container.querySelector("p")!.textContent).toBe("d:1,c:11");
+    expect(container.querySelector("p")).toBe(p);
+  });
+
+  // 10. Регресс на preemption: эффект отброшенного рендера не запускается,
+  //     durable deps/cleanup не испорчены отброшенным WIP.
+  it("вытесненный рендер не запускает эффект и не портит durable deps/cleanup", () => {
+    // Управляемые deps: шагающие часы растягивают рендер на тики,
+    // замороженные — коммитят синхронно (как в useState-регрессе выше).
+    let stepping = false;
+    let clock = 0;
+    const ticks: Array<() => void> = [];
+    __setSchedulerDeps({
+      now: () => (stepping ? clock++ : 0),
+      scheduleTick: (cb) => ticks.push(cb),
+      frameBudgetMs: 3,
+    });
+
+    const runs: number[] = [];
+    const cleanups: number[] = [];
+    const seenPrev: number[] = [];
+    let renderCount = 0;
+    let capturedSetCount: Setter<number> | null = null;
+    function Counter(): VNode {
+      renderCount++;
+      const [count, setCount] = useState(0);
+      capturedSetCount ??= setCount;
+      useEffect(() => {
+        runs.push(count);
+        return () => cleanups.push(count);
+      }, [count]);
+      return h("p", { id: "c" }, `c:${count}`);
+    }
+    const spans = Array.from({ length: 8 }, (_, i) => h("span", null, `s${i}`));
+    const treeA = h("div", null, h(Counter, null), ...spans);
+    const treeB = h("div", null, h(Counter, null));
+
+    const container = document.createElement("div");
+    scheduleWork(container, treeA, Priority.Normal); // часы заморожены → синхронно
+    expect(container.querySelector("#c")!.textContent).toBe("c:0");
+    expect(runs).toEqual([0]);
+    expect(cleanups).toEqual([]);
+
+    // Длинный Normal-рендер от setState, растянутый на тики.
+    stepping = true;
+    capturedSetCount!((prev) => {
+      seenPrev.push(prev);
+      return prev + 1;
+    });
+    // Докрутить до точки «Counter отрендерен в WIP (снимок эффекта решил
+    // shouldRun), commit впереди».
+    while (seenPrev.length === 0) {
+      expect(ticks.length).toBeGreaterThan(0);
+      ticks.shift()!();
+    }
+    // (а) Эффект недокоммиченного рендера НЕ запустился.
+    expect(runs).toEqual([0]);
+    expect(container.querySelector("#c")!.textContent).toBe("c:0");
+
+    // Вытеснение ДО commit.
+    stepping = false;
+    scheduleWork(container, treeB, Priority.UserBlocking);
+
+    // (б) Durable deps/cleanup целы: вытесняющий ЗАКОММИЧЕННЫЙ рендер увидел
+    // prevDeps=[0], count=1 → перезапуск (cleanup прежнего, затем новый).
+    // Если бы отброшенный WIP записал deps=[1] в durable, перезапуска бы
+    // не было — runs остался бы [0].
+    expect(container.querySelector("#c")!.textContent).toBe("c:1");
+    expect(runs).toEqual([0, 1]);
+    expect(cleanups).toEqual([0]);
+
+    // Свидетель: запусков эффекта — ровно по числу КОММИТОВ (2), а не
+    // рендеров (3: mount, отброшенный WIP, вытесняющий).
+    expect(renderCount).toBe(3);
+
+    // Отставшие тики отброшенного рендера безвредны.
+    while (ticks.length > 0) {
+      ticks.shift()!();
+    }
+    expect(runs).toEqual([0, 1]);
+    expect(cleanups).toEqual([0]);
+    expect(container.querySelector("#c")!.textContent).toBe("c:1");
+  });
+
+  // Rules of hooks: вызов вне рендера компонента — явная ошибка (как useState).
+  it("useEffect вне рендера компонента бросает понятную ошибку", () => {
+    expect(() => useEffect(() => {})).toThrowError(/outside of a function component/);
+  });
+
+  // Регресс на находку независимого ревью: setState-в-эффекте инициирует
+  // реентрантный `scheduleWork`/`workLoop` (см. commitWip → runPassiveEffects).
+  // Если этот вложенный рендер НЕ укладывается в бюджет и уступает (tick
+  // запланирован, nextUnitOfWork указывает на его WIP), а очередь обновлений
+  // не пуста — безусловный `startNextPendingRender()` во ВНЕШНЕМ `workLoop`
+  // (сразу после `commitWip()`) перезаписывал модульное состояние
+  // (`wipRoot`/`wipContainer`/`wipVNode`) поверх приостановленного вложенного
+  // рендера, осиротив его: его отложенный тик потом резюмировал уже чужое
+  // состояние. Симптом — потерянный рендер одного контейнера и задвоенный
+  // DOM-узел другого. Фикс — `workLoop` не зовёт `startNextPendingRender()`
+  // повторно, если `nextUnitOfWork !== null` (вложенный рендер уже в полёте).
+  it("реентрантный setState-в-эффекте не затирает приостановленный вложенный рендер", () => {
+    // Stepping clock: заморожен (0) для синхронных коммитов, включается, чтобы
+    // заставить вложенный реентрантный рендер уступить бюджет посреди работы.
+    let stepping = false;
+    let clock = 0;
+    const ticks: Array<() => void> = [];
+    __setSchedulerDeps({
+      now: () => (stepping ? clock++ : 0),
+      scheduleTick: (cb) => ticks.push(cb),
+      frameBudgetMs: 3,
+    });
+
+    const containerA = document.createElement("div");
+    const containerB = document.createElement("div");
+
+    function AppB(): VNode {
+      return h("p", { id: "b" }, "b:0");
+    }
+    function AppBUpdated(): VNode {
+      return h("p", { id: "b" }, "b:1");
+    }
+
+    let renderLong = false;
+    let did = false;
+    function AppA(): VNode {
+      const [n, setN] = useState(0);
+      useEffect(() => {
+        if (n === 0 && !did) {
+          did = true;
+          renderLong = true;
+          stepping = true; // заставляет реентрантный ре-рендер выйти за бюджет
+          setN(1); // вложенный рендер A запускается и УСТУПАЕТ (приостановлен)
+          // Вложенный рендер A/n=1 приостановлен здесь (тик в очереди).
+          // Планируем ДРУГОЙ контейнер тем же приоритетом: остаётся в pending.
+          scheduleWork(containerB, h(AppBUpdated, null), Priority.Normal);
+        }
+      }, [n]);
+      const count = renderLong ? 40 : 1;
+      return h(
+        "div",
+        null,
+        ...Array.from({ length: count }, (_, i) => h("span", null, `a${i}`)),
+      );
+    }
+
+    // Mount B (замороженные часы → синхронный коммит).
+    scheduleWork(containerB, h(AppB, null), Priority.Normal);
+    expect(containerB.querySelector("#b")!.textContent).toBe("b:0");
+
+    // Mount A: mount коммитится синхронно; passive-фаза запускает каскад.
+    scheduleWork(containerA, h(AppA, null), Priority.Normal);
+
+    // Прокрутить все тики в очереди (возобновить приостановленные рендеры).
+    stepping = false;
+    let guard = 0;
+    while (ticks.length > 0 && guard++ < 100) {
+      ticks.shift()!();
+    }
+
+    // Корректное поведение (нарушалось до фикса): рендер A с n=1 обязан в
+    // итоге закоммититься (40 спанов), а не застрять осиротевшим на
+    // mount-версии — это ровно то, что чинит guard `nextUnitOfWork === null`
+    // в `workLoop`.
+    expect(containerA.querySelectorAll("span").length).toBe(40);
+
+    // Примечание: B здесь только чтобы после mount'а A в очереди `pending`
+    // осталась запись (иначе внешний `startNextPendingRender()` после
+    // `commitWip()` просто увидел бы пустую очередь, и клоббер было бы
+    // нечем демонстрировать). Корректность ДИФФА B (а не просто того, что
+    // его апдейт вообще выполнился) — отдельная, ДО-существующая находка вне
+    // объёма этого плана: `scheduler.ts` хранит `currentContainer`/
+    // `currentRoot`/`currentVNode` в ОДНОЙ глобальной тройке, а не per-контейнер,
+    // так что апдейт контейнера, который не был "последним закоммиченным",
+    // всегда идёт как чистый remount, а не diff (воспроизводится и на
+    // `master`, без единого хука/эффекта — см. отчёт ревью). Эта правка её не
+    // касается и не должна маскировать; проверяем только то, что апдейт B
+    // реально произошёл (эффект от него виден), не форму итогового DOM.
+    expect(containerB.textContent).toContain("b:1");
   });
 });

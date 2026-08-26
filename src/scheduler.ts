@@ -4,7 +4,7 @@ import {
   performUnitOfWork,
   type Fiber,
 } from "./fiber.js";
-import { __setRerenderScheduler } from "./hooks.js";
+import { __setRerenderScheduler, runPassiveEffects } from "./hooks.js";
 import type { VNode } from "./types.js";
 
 /**
@@ -248,7 +248,14 @@ function workLoop(): void {
   // checks past this point).
   commitWip();
 
-  if (startNextPendingRender()) {
+  // Post-MVP §1: a passive effect's `setState` can re-enter this function
+  // (via `commitWip` → `runPassiveEffects`) and, if that reentrant render
+  // yields mid-flight, leave `nextUnitOfWork` pointing at ITS suspended WIP
+  // with a tick already scheduled. Only pull the next queued render here when
+  // no such suspended render is in flight — otherwise this call would
+  // overwrite the suspended render's module state (`wipRoot`/`wipContainer`/
+  // `wipVNode`) out from under its pending tick, orphaning it.
+  if (nextUnitOfWork === null && startNextPendingRender()) {
     // More queued updates: re-enter through the guard with a fresh deadline
     // (the commit may have eaten the rest of this slice's budget).
     workLoop();
@@ -259,7 +266,7 @@ function workLoop(): void {
 function commitWip(): void {
   // Invariant: the walk just returned null, so a WIP root exists.
   const root = wipRoot!;
-  commitRoot(root);
+  const pending = commitRoot(root);
   // Strictly AFTER the commit: `current*` must always describe the real DOM.
   currentContainer = wipContainer;
   currentRoot = root;
@@ -267,6 +274,11 @@ function commitWip(): void {
   wipRoot = null;
   wipVNode = null;
   wipContainer = null;
+  // Passive effects run LAST, after the `current*` promotion above: a setState
+  // inside an effect re-enters the scheduler synchronously (possibly nesting
+  // another full render+commitWip); with no code after this call there is
+  // nothing left in THIS frame to clobber the nested commit's promotion.
+  runPassiveEffects(pending);
 }
 
 /**
