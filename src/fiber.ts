@@ -1,9 +1,11 @@
 import {
   beginHooks,
+  collectFiberCleanups,
   commitFiberHooks,
   finishHooks,
   type Hook,
   type HookSnapshot,
+  type PendingEffect,
 } from "./hooks.js";
 import { createDomNode, isKeyedChildren, patchProps } from "./reconciler.js";
 import {
@@ -332,6 +334,11 @@ function addDeletion(parent: Fiber, prev: PrevSlot): void {
     sibling: null,
     alternate: null,
     effectTag: "DELETION",
+    // Post-MVP §1: carry the committed hooks so an unmounting component's own
+    // effect cleanups are reachable from the DELETION walk
+    // (collectDeletionCleanups); descendants keep theirs — the child chain
+    // above consists of the real committed fibers.
+    hooks: prev.fiber?.hooks,
   };
   (parent.deletions ??= []).push(deletion);
 }
@@ -389,10 +396,21 @@ function matchKeyedChildren(prevSlots: PrevSlot[], nextChildren: VNode[]): Child
  * Stage 3 primitives: {@link createDomNode} for PLACEMENT subtrees,
  * {@link patchProps} for UPDATE props, and the `lastPlaced`/`insertBefore`
  * positioning strategy of `patchKeyedChildren` for ordering.
+ *
+ * Post-MVP §1: RETURNS the passive effects gathered during finalisation
+ * (unmount cleanups first, then mount/update effects) instead of running them.
+ * Running them here would be unsafe: an effect's `setState` re-enters the
+ * scheduler synchronously, and a nested commit finishing before the OUTER
+ * `commitWip` promoted `current*` would let the outer epilogue clobber the
+ * promotion. The scheduler runs the returned effects strictly after the
+ * `current*` promotion (see `commitWip` in scheduler.ts).
  */
-export function commitRoot(rootFiber: Fiber): void {
+export function commitRoot(rootFiber: Fiber): PendingEffect[] {
   commitChildren(rootFiber);
-  finalizeHooks(rootFiber);
+  const pending: PendingEffect[] = [];
+  collectDeletionCleanups(rootFiber, pending);
+  finalizeHooks(rootFiber, pending);
+  return pending;
 }
 
 /**
@@ -405,13 +423,53 @@ export function commitRoot(rootFiber: Fiber): void {
  * every component fiber, PLACEMENT and UPDATE alike. Runs inside the same
  * synchronous, indivisible commit as the DOM effects — no deadline checks
  * (plain recursion is fine: only the render walk must be non-recursive).
+ *
+ * Post-MVP §1: the walk is POST-ORDER (children before their parent), so
+ * gathered effects run child-first — matching React's passive-effect order
+ * (a parent's effect observes its children's effects already done). State-slot
+ * finalisation is order-insensitive (a plain field write), so the pre→post
+ * change cannot affect `useState` behaviour.
  */
-function finalizeHooks(fiber: Fiber): void {
+function finalizeHooks(fiber: Fiber, pending: PendingEffect[]): void {
+  for (let child = fiber.child; child !== null; child = child.sibling) {
+    finalizeHooks(child, pending);
+  }
   if (isComponentFiber(fiber)) {
-    commitFiberHooks(fiber);
+    commitFiberHooks(fiber, pending);
+  }
+}
+
+/**
+ * Post-MVP §1, closing the Stage 6 design gap "deleted subtrees are never
+ * finalised": walk the whole committed tree and, for every DELETION recorded
+ * on it, descend through the deleted subtree (its `child` points at the
+ * previously committed child chain — see {@link addDeletion}) gathering the
+ * durable effect cleanups of every component fiber inside as cleanup-only
+ * entries. Losing durable state there was correct for `useState`; for
+ * `useEffect` the cleanup MUST fire on unmount.
+ *
+ * Called before {@link finalizeHooks}, so unmount cleanups land in `pending`
+ * ahead of mount/update effects. The cleanups run in the passive phase, i.e.
+ * AFTER `commitChildren` physically removed the host DOM — an accepted
+ * teaching-scope simplification (cleanups must not rely on the removed DOM;
+ * reordering would mean restructuring the whole commit pass).
+ */
+function collectDeletionCleanups(fiber: Fiber, pending: PendingEffect[]): void {
+  for (const deletion of fiber.deletions ?? []) {
+    collectSubtreeCleanups(deletion, pending);
   }
   for (let child = fiber.child; child !== null; child = child.sibling) {
-    finalizeHooks(child);
+    collectDeletionCleanups(child, pending);
+  }
+}
+
+/** Gather effect cleanups of every component fiber in a deleted subtree. */
+function collectSubtreeCleanups(fiber: Fiber, pending: PendingEffect[]): void {
+  if (isComponentFiber(fiber)) {
+    collectFiberCleanups(fiber, pending);
+  }
+  for (let child = fiber.child; child !== null; child = child.sibling) {
+    collectSubtreeCleanups(child, pending);
   }
 }
 
