@@ -2,11 +2,12 @@
 
 ## Состояние
 
-Ветка `post-mvp/use-effect`, запушена, **PR #7 открыт**
-(https://github.com/akomyagin/vdom-fiber/pull/7), **не смержен** — ждёт решения
-пользователя на GitHub. До неё — `master` @ `f7ed3d9` (merge PR #6, MVP Этап 0-6
-закрыт). Перед следующей темой проверить `git log --oneline -5 master` — если PR #7
-уже смержен и ветка удалена, обновить этот файл/`project_vdom_fiber_status` памяти.
+**PR #7 смержен в `master`** (https://github.com/akomyagin/vdom-fiber/pull/7,
+коммит `5161175`); ветка `post-mvp/use-effect` удалена и на GitHub, и локально.
+`useEffect` (POST_MVP §1) полностью в `master`. Этот файл не закоммичен повторно
+(правило проекта — не пушить напрямую в `master`, см. память
+`feedback_no_direct_push_to_master`); правка сольётся первым коммитом со
+следующей темой POST_MVP.
 
 `useEffect` реализован: хук с массивом зависимостей, passive-эффекты после commit-фазы,
 cleanup перед повторным запуском и при unmount (включая вложенный). Второй из двух

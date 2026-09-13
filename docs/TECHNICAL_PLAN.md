@@ -29,6 +29,13 @@
 вынесен в [POST_MVP_PLAN.md](./POST_MVP_PLAN.md), потому что это отдельная тема
 (тулинг), не связанная с ядром рендер-движка.
 
+Это решение — не только про JSX-тулинг, а про более широкий, осознанный trade-off: `vdom-fiber`
+остаётся **runtime-only**, без стадии компиляции. Production-аналоги вроде Vue 3 (PatchFlags,
+Tree Flattening) и Vue Vapor/Svelte 5 (компиляция вообще без vdom) ускоряют диффинг или убирают
+его целиком именно за счёт статического анализа шаблона на этапе сборки — техники, требующие
+компилятора, который проект сознательно не вводит. Подробный разбор — в
+[docs/research/vdom-fiber-landscape.md](research/vdom-fiber-landscape.md#15-vue-3--compiler-driven-оптимизация-диффа).
+
 ## Структура каталогов
 
 ```
@@ -39,7 +46,7 @@ src/
 ├── reconciler.ts     # Этап 3: VDOM-диффинг для повторных рендеров
 ├── fiber.ts          # Этап 4: Fiber-нода + performUnitOfWork
 ├── scheduler.ts      # Этап 5: work loop, приоритеты, прерывание
-├── hooks.ts          # Этап 6: useState
+├── hooks.ts          # Этап 6: useState; POST_MVP §1: useEffect
 ├── index.ts          # публичный ре-экспорт
 └── *.test.ts         # тесты рядом с исходниками
 docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
@@ -130,6 +137,21 @@ docs/                 # PLAN / TECHNICAL_PLAN / POST_MVP_PLAN
 - Тесты (jsdom): начальный рендер, `setState` обновляет DOM, несколько независимых
   состояний в одном компоненте, функциональный апдейтер `setState(prev => …)`.
 - DoD: счётчик работает end-to-end через собственный VDOM + Fiber + scheduler + hooks.
+
+### POST_MVP §1 — `useEffect` (passive effects) (готово)
+
+- `useEffect(create, deps?)` в `hooks.ts`: durable `EffectHook` в том же per-fiber
+  hook-list, что и `useState` (дискриминация по `kind`), с той же write-дисциплиной
+  snapshot-in-render / finalize-in-commit.
+- Passive-фаза: `commitRoot` собирает `PendingEffect[]` и возвращает их, не запуская;
+  `runPassiveEffects` вызывается из `commitWip` (`scheduler.ts`) синхронно, строго после
+  промоушена `current*` (реентрантность `setState`-в-эффекте — см. план, Развилка 4).
+- Cleanup: перед повторным запуском (deps изменились) и при unmount, включая вложенный
+  (`collectDeletionCleanups`/`collectSubtreeCleanups` в `fiber.ts`).
+- План — [../docs/plans/post-mvp-use-effect.md](./plans/post-mvp-use-effect.md),
+  чекпоинт — [handoff/2026-08-26-post-mvp-use-effect.md](./handoff/2026-08-26-post-mvp-use-effect.md).
+- DoD: `useEffect` в `src/index.ts`; эффекты после commit; cleanup при повторном запуске
+  и при unmount; регресс-тесты preemption и реентрантности зелёные.
 
 ## Тестовая стратегия
 
